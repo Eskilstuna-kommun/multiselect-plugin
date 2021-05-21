@@ -60,6 +60,168 @@ const Multiselect = function Multiselect(options = {}) {
     viewer.dispatch('toggleClickInteraction', detail);
   }
 
+  function getCenter(geometryIn) {
+    const geometry = geometryIn.clone();
+    const geomType = geometry.getType();
+
+    let center;
+    switch (geomType) {
+      case 'Polygon':
+        center = geometry.getInteriorPoint().getCoordinates();
+        break;
+      case 'MultiPolygon':
+        center = geometry.getInteriorPoints().getCoordinates()[0];
+        break;
+      case 'Point':
+        center = geometry.getCoordinates();
+        break;
+      case 'MultiPoint': // Modified for EK, case of undefined
+        center = geometry[0] ? geometry[0].getCoordinates() : geometry.getFirstCoordinate();
+        break;
+      case 'LineString':
+        center = geometry.getCoordinateAt(0.5);
+        break;
+      case 'MultiLineString':
+        center = geometry.getLineStrings()[0].getCoordinateAt(0.5);
+        break;
+      case 'Circle':
+        center = geometry.getCenter();
+        break;
+      default:
+        center = undefined;
+    }
+    return center;
+  }
+
+  function cleanItem(item) {
+    const tempItem = item.getFeature().getProperties();
+    if (tempItem.geometry) { delete tempItem.geometry; }
+    if (tempItem.textHtml) { delete tempItem.textHtml; }
+    if (tempItem.geom) { delete tempItem.geom; }
+    if (tempItem.state) { delete tempItem.state; }
+    return JSON.stringify(tempItem);
+  }
+
+  function filterItems(items) {
+    const newItems = [];
+    const tempItems = [];
+
+    items.forEach((item) => {
+      const isWfsFeature = typeof item.length === 'undefined';
+      if (item.length === 1 || isWfsFeature) {
+        const tempItem = cleanItem(isWfsFeature ? item : item[0]);
+
+        if (!tempItems.includes(tempItem)) {
+          tempItems.push(tempItem);
+          newItems.push(isWfsFeature ? item : item[0]);
+        }
+      } else if (item.length > 1) {
+        item.forEach((innerItem) => {
+          const tempItem = cleanItem(innerItem);
+
+          if (!tempItems.includes(tempItem)) {
+            tempItems.push(tempItem);
+            newItems.push(innerItem);
+          }
+        });
+      }
+    });
+
+    return newItems;
+  }
+
+  function checkForExistingSelection(items) {
+    const tempSelectedItems = [];
+    const notAlreadySelectedItems = [];
+
+    items.forEach((item) => {
+      const selectionGroup = item.getSelectionGroup();
+      const selectedItems = selectionManager.getSelectedItemsForASelectionGroup(selectionGroup);
+      const tempItem = cleanItem(item);
+
+      if (selectedItems.length > 0) {
+        selectedItems.forEach((selectedItem) => {
+          const tempSelectedItem = cleanItem(selectedItem);
+
+          if (!tempSelectedItems.includes(tempSelectedItem)) {
+            tempSelectedItems.push(tempSelectedItem);
+          }
+        });
+      }
+
+      if (!tempSelectedItems.includes(tempItem)) {
+        notAlreadySelectedItems.push(item);
+      }
+    });
+
+    return notAlreadySelectedItems;
+  }
+
+  function getFeatureInfoForItems(allItems) {
+    const clientResult = [];
+    allItems.forEach((item) => {
+      const layers = viewer.getQueryableLayers();
+      const coordinate = getCenter(item.getFeature().getGeometry());
+      const pixel = map.getPixelFromCoordinate(coordinate).map(x => Math.round(x));
+
+      const res = Origo.getFeatureInfo.getFeaturesFromRemote({
+        coordinate,
+        layers,
+        map,
+        pixel
+      }, viewer);
+      clientResult.push(res);
+    });
+
+    Promise.all(clientResult).then((items) => {
+      if (typeof items !== 'undefined' && items.length > 0) {
+        const newItems = checkForExistingSelection(filterItems(items));
+
+        if (newItems.length === 1) {
+          selectionManager.addOrHighlightItem(newItems[0]);
+        } else if (newItems.length > 1) {
+          selectionManager.addItems(newItems);
+        }
+      }
+    });
+  }
+
+  function checkInfoFormat(allItems) {
+    let hasTextHtml = false;
+    allItems.forEach((item) => {
+      if (item.getLayer().get('infoFormat') === 'text/html') {
+        hasTextHtml = true;
+      }
+    });
+    return hasTextHtml;
+  }
+
+  function checkLayerParam(allItems, param, value) {
+    let hasParam = false;
+    allItems.forEach((item) => {
+      if (item.getLayer().get(param) === value) {
+        hasParam = true;
+      }
+    });
+    return hasParam;
+  }
+
+  function addItemsToSelection(allItems) {
+    const infoFormatIsTextHtml = checkInfoFormat(allItems);
+    const isWfsLayer = checkLayerParam(allItems, 'type', 'WFS');
+
+    if (infoFormatIsTextHtml && !isWfsLayer) {
+      getFeatureInfoForItems(allItems);
+    } else {
+      const newItems = checkForExistingSelection(filterItems(allItems));
+      if (newItems.length === 1) {
+        selectionManager.addOrHighlightItem(newItems[0]);
+      } else if (newItems.length > 1) {
+        selectionManager.addItems(newItems);
+      }
+    }
+  }
+
   function enableInteraction() {
     document.getElementById(multiselectButton.getId()).classList.add('active');
     if (clickSelection) {
@@ -267,10 +429,8 @@ const Multiselect = function Multiselect(options = {}) {
               if (result.length > 0) {
                 selectionManager.removeItems(result);
               }
-            } else if (result.length === 1) {
-              selectionManager.addOrHighlightItem(result[0]);
-            } else if (result.length > 1) {
-              selectionManager.addItems(result);
+            } else {
+              addItemsToSelection(result);
             }
           });
       }
@@ -281,6 +441,7 @@ const Multiselect = function Multiselect(options = {}) {
 
   function fetchFeatures_Box(evt) {
     const extent = evt.feature.getGeometry().getExtent();
+    const box = evt.feature.getGeometry();
     const layers = viewer.getQueryableLayers();
 
     if (layers.length < 1) {
@@ -290,18 +451,13 @@ const Multiselect = function Multiselect(options = {}) {
     let allItems = [];
     const results = getItemsIntersectingExtent(layers, extent);
     // adding cleint features
-    allItems = allItems.concat(results.selectedClientItems);
+    allItems = allItems.concat(getItemsIntersectingGeometry(results.selectedClientItems, box));
 
     // adding features got from wfs GetFeature
     Promise.all(results.selectedRemoteItemsPromises).then((data) => {
       // data is an array containing corresponding array of features for each layer.
-      data.forEach((items) => allItems = allItems.concat(items));
-
-      if (allItems.length === 1) {
-        selectionManager.addOrHighlightItem(allItems[0]);
-      } else if (allItems.length > 1) {
-        selectionManager.addItems(allItems);
-      }
+      data.forEach((items) => { allItems = allItems.concat(getItemsIntersectingGeometry(items, box)); });
+      addItemsToSelection(allItems);
     }).catch((err) => console.error(err));
   }
 
@@ -327,13 +483,8 @@ const Multiselect = function Multiselect(options = {}) {
     // adding features got from wfs GetFeature
     Promise.all(results.selectedRemoteItemsPromises).then((data) => {
       // data is an array containing corresponding arrays of features for each layer.
-      data.forEach((items) => allItems = allItems.concat(getItemsIntersectingGeometry(items, circle)));
-
-      if (allItems.length === 1) {
-        selectionManager.addOrHighlightItem(allItems[0]);
-      } else if (allItems.length > 1) {
-        selectionManager.addItems(allItems);
-      }
+      data.forEach((items) => { allItems = allItems.concat(getItemsIntersectingGeometry(items, circle)); });
+      addItemsToSelection(allItems);
     });
 
     // Uncomment this to draw the extent on the map for debugging porposes
@@ -355,13 +506,8 @@ const Multiselect = function Multiselect(options = {}) {
     // adding features got from wfs GetFeature
     Promise.all(results.selectedRemoteItemsPromises).then((data) => {
       // data is an array containing corresponding arrays of features for each layer.
-      data.forEach((items) => allItems = allItems.concat(getItemsIntersectingGeometry(items, polygon)));
-
-      if (allItems.length === 1) {
-        selectionManager.addOrHighlightItem(allItems[0]);
-      } else if (allItems.length > 1) {
-        selectionManager.addItems(allItems);
-      }
+      data.forEach((items) => { allItems = allItems.concat(getItemsIntersectingGeometry(items, polygon)); });
+      addItemsToSelection(allItems);
     });
 
     // Uncomment this to draw the extent on the map for debugging porposes
@@ -421,12 +567,8 @@ const Multiselect = function Multiselect(options = {}) {
     allItems = allItems.concat(getItemsIntersectingGeometry(results.selectedClientItems, line));
 
     Promise.all(results.selectedRemoteItemsPromises).then((data) => {
-      data.forEach((items) => allItems = allItems.concat(getItemsIntersectingGeometry(items, line)));
-      if (allItems.length === 1) {
-        selectionManager.addOrHighlightItem(allItems[0]);
-      } else if (allItems.length > 1) {
-        selectionManager.addItems(allItems);
-      }
+      data.forEach((items) => { allItems = allItems.concat(getItemsIntersectingGeometry(items, line)); });
+      addItemsToSelection(allItems);
     });
 
     // Uncomment this to draw the extent on the map for debugging porposes
@@ -529,13 +671,8 @@ const Multiselect = function Multiselect(options = {}) {
     // adding features got from wfs GetFeature
     Promise.all(results.selectedRemoteItemsPromises).then((data) => {
       // data is an array containing corresponding arrays of features for each layer.
-      data.forEach((items) => allItems = allItems.concat(getItemsIntersectingGeometry(items, bufferedGeometry)));
-
-      if (allItems.length === 1) {
-        selectionManager.addOrHighlightItem(allItems[0]);
-      } else if (allItems.length > 1) {
-        selectionManager.addItems(allItems);
-      }
+      data.forEach((items) => { allItems = allItems.concat(getItemsIntersectingGeometry(items, bufferedGeometry)); });
+      addItemsToSelection(allItems);
     });
   }
 
@@ -606,6 +743,10 @@ const Multiselect = function Multiselect(options = {}) {
 
     function shouldSkipLayer(layer) {
       if (!layer.get('queryable')) {
+        return true;
+      }
+
+      if (layer.get('ArcGIS')) {
         return true;
       }
 
@@ -747,7 +888,7 @@ const Multiselect = function Multiselect(options = {}) {
             toggleMultiselection();
           },
           icon: '#baseline-select-all-24px',
-          tooltipText: 'Markera i kartan',
+          tooltipText: 'Multiselektering',
           tooltipPlacement: 'east'
         });
         buttons.push(multiselectButton);
