@@ -804,6 +804,7 @@ const Multiselect = function Multiselect(options = {}) {
     }
 
     const intersectingItems = [];
+    if (items) {
     items.forEach((item) => {
       const feature = item.getFeature();
       feature.getGeometry().transform(projection, 'EPSG:4326');
@@ -816,7 +817,7 @@ const Multiselect = function Multiselect(options = {}) {
 
       feature.getGeometry().transform('EPSG:4326', projection);
     });
-
+  }
     /*
     Uncomment this to draw the geometry for debugging puposes.
     const olFeature = format.readFeature(turfGeometry);
@@ -829,16 +830,21 @@ const Multiselect = function Multiselect(options = {}) {
     return intersectingItems;
   }
 
-  function getFeaturesFromWfsServer(layer, extent, selectionGroup, selectionGroupTitle) {
-    return new Promise(((resolve) => {
-      const req = Origo.getFeature(null, layer, viewer.getMapSource(), viewer.getProjectionCode(), viewer.getProjection(), extent);
-	  req.then((data) => {
-        const selectedRemoteItems = data.map((feature) => new Origo.SelectedItem(feature, layer, map, selectionGroup, selectionGroupTitle));
-        resolve(selectedRemoteItems);
-      })
-        .catch((err) => { console.error(err); });
-    }));
-  }
+  async function getFeaturesFromWfsServer(layer, extent, selectionGroup, selectionGroupTitle) {
+    let features;
+    let selectedRemoteItems;
+    // try {
+    features = await Origo.getFeature(null, layer, viewer.getMapSource(), viewer.getProjectionCode(), viewer.getProjection(), extent);
+    // } catch (error) {
+      // we don't strictly need a warning in the console at the moment
+      // better to handle it here than for getFeature to log an error and return undefined 
+      // console.warn(`MS-issue with layer: ${layer.get('name')}`);
+    // }
+    if (features) {
+      selectedRemoteItems = features.map((feature) => new Origo.SelectedItem(feature, layer, map, selectionGroup, selectionGroupTitle));
+    }
+    return selectedRemoteItems;
+  } 
 
   function createRadiusLengthTooltip() {
     if (radiusLengthTooltipElement) {
