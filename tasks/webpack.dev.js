@@ -1,6 +1,5 @@
 const { merge } = require('webpack-merge');
-const common = require('./webpack.common.js');
-
+const common = require('./webpack.common');
 
 module.exports = merge(common, {
   output: {
@@ -12,17 +11,12 @@ module.exports = merge(common, {
     library: 'Multiselect'
   },
   mode: 'development',
-  module: {
-  },
+  module: {},
 
   devServer: {
     static: './',
     port: 9008,
     devMiddleware: {
-      //index: true,
-      //mimeTypes: { 'text/html': ['phtml'] },
-      //publicPath: '/publicPathForDevServe',
-      //serverSideRender: true,
       writeToDisk: true
     }
   }
