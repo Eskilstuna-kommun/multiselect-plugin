@@ -831,20 +831,32 @@ const Multiselect = function Multiselect(options = {}) {
   }
 
   async function getFeaturesFromWfsServer(layer, extent, selectionGroup, selectionGroupTitle) {
-    let features;
+    let filterAddedtoWMS;
     let selectedRemoteItems;
-    // try {
-    features = await Origo.getFeature(null, layer, viewer.getMapSource(), viewer.getProjectionCode(), viewer.getProjection(), extent);
-    // } catch (error) {
-      // we don't strictly need a warning in the console at the moment
-      // better to handle it here than for getFeature to log an error and return undefined 
-      // console.warn(`MS-issue with layer: ${layer.get('name')}`);
-    // }
+
+    // check for a CQL_FILTER param presence on the layer source as is the case after the filter plugin
+    // or after a sourceParam prop of the layer definition
+    // set its value as the layer's "filter" prop, which does not belong on a WMS layer but is what Origo's getFeature currently parses
+    if (layer.get('type') === 'WMS') {
+      const filter = layer.getSource().getParams()?.CQL_FILTER;
+      if (filter) {
+        layer.set('filter', filter);
+        filterAddedtoWMS = true;
+      }
+    }
+
+    const features = await Origo.getFeature(null, layer, viewer.getMapSource(), viewer.getProjectionCode(), viewer.getProjection(), extent);
+
+    // reset the 'filter' prop only if it was just, regardless of the fact that the prop should currently not be set otherwise
+    if (filterAddedtoWMS) {
+      layer.set('filter', null);
+    }
+
     if (features) {
       selectedRemoteItems = features.map((feature) => new Origo.SelectedItem(feature, layer, map, selectionGroup, selectionGroupTitle));
     }
     return selectedRemoteItems;
-  } 
+  }
 
   function createRadiusLengthTooltip() {
     if (radiusLengthTooltipElement) {
