@@ -61,6 +61,7 @@ const Multiselect = function Multiselect(options = {}) {
   }
 
   function getCenter(geometryIn) {
+    if (!geometryIn) { return undefined; }
     const geometry = geometryIn.clone();
     const geomType = geometry.getType();
 
@@ -162,15 +163,18 @@ const Multiselect = function Multiselect(options = {}) {
     allItems.forEach((item) => {
       const layers = viewer.getQueryableLayers();
       const coordinate = getCenter(item.getFeature().getGeometry());
-      const pixel = map.getPixelFromCoordinate(coordinate).map(x => Math.round(x));
+      if (coordinate) { // for some types of raster getfeatureinfo application/json responses that would otherwise cause a crash
+        const pixel = map.getPixelFromCoordinate(coordinate).map((x) => Math.round(x));
 
-      const res = Origo.getFeatureInfo.getFeaturesFromRemote({
-        coordinate,
-        layers,
-        map,
-        pixel
-      }, viewer);
-      clientResult.push(res);
+        const res = Origo.getFeatureInfo.getFeaturesFromRemote({
+          coordinate,
+          layers,
+          map,
+          pixel
+        }, viewer);
+
+        clientResult.push(res);
+      }
     });
 
     Promise.all(clientResult).then((items) => {
@@ -845,7 +849,13 @@ const Multiselect = function Multiselect(options = {}) {
       }
     }
 
-    const features = await Origo.getFeature(null, layer, viewer.getMapSource(), viewer.getProjectionCode(), viewer.getProjection(), extent);
+    let features;
+    try {
+      features = await Origo.getFeature(null, layer, viewer.getMapSource(), viewer.getProjectionCode(), viewer.getProjection(), extent);
+    } catch (error) {
+      console.log(`Multiselect experienced an issue getting features from ${layer.get('name')}
+      should this layer be queryable?`);
+    }
 
     // reset the 'filter' prop only if it was just, regardless of the fact that the prop should currently not be set otherwise
     if (filterAddedtoWMS) {
